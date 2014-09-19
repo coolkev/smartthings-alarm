@@ -21,11 +21,10 @@ preferences {
     	for (int i=1;i<=8;i++) {
 			input "zone" + i, title: "Zone " + i, "string", description:"Zone " + i, required: false
         }
-        //input "zone1", title: "Zone 1", "string", description:"Zone 1", required: false
-        //input "zone2", title: "Zone 2", "string", description:"Zone 2", required: false
+        
 	}
     section("Which Arduino shield?") {
-		input "arduino", title: "Shield","device.arduinoAlarmDeviceType"
+		input "arduino", title: "Shield","device.arduinoThingShield"
     }    
     
     
@@ -47,7 +46,7 @@ def initialize() {
 
     
     // Listen to anything which happens on the device
-    subscribe(arduino, "zonestatuschanged", zonestatusChanged)
+    subscribe(arduino, "response", zonestatusChanged)
     
     
     settings.each {s ->
@@ -63,11 +62,7 @@ def initialize() {
             def existingDevice = getChildDevice(name)
             if(!existingDevice) {
                 log.debug "creating device: ${name}"
-            	def childDevice = addChildDevice("coolkev", "Arduino Alarm Virtual Contact Sensor", name, null, [name: "Device.${name}", label: value, completedSetup: true])
-            }
-            else {
-                log.debug "device already exists: ${name}"
-
+            	def childDevice = addChildDevice("smartthings", "Open/Closed Sensor", name, null, [name: "Device.${name}", label: value, completedSetup: true])
             }
 
         }
@@ -95,15 +90,14 @@ private removeChildDevices(delete) {
 def zonestatusChanged(evt)
 {
 	
-    //def value = zigbee.parse(evt)?.text
     
     log.debug "zonestatusChanged ${evt.value}"
     
     
     def parts = evt.value.split();
     
-    def zone = parts[0]
-    def status = parts[1]
+    def zone = parts[1]
+    def status = parts[2]
     
     log.debug "zone ${zone}"
     log.debug "status ${status}"
@@ -113,7 +107,17 @@ def zonestatusChanged(evt)
     if (device)
     {
     	log.debug "$device statusChanged $status"
-    	device.statusChanged(status)
+        //log.debug "${device.supportedCommands}"
+    	
+        //def zigbeevalue = status=="open" ? "zone report :: type: 19 value: 0031" : "zone report :: type: 19 value: 0030"
+        //def event = [deviceId: device.id, name:"contact",value:status, isStateChange:true];
+        //log.debug "sending event $event"
+       device.sendEvent(name: "contact", value: status, isStateChange:true)
     
+    }
+    else {
+    
+    	log.debug "couldn't find device for zone ${zone}"
+    	
     }
 }
