@@ -64,6 +64,12 @@ def initialize() {
                 log.debug "creating device: ${name}"
             	def childDevice = addChildDevice("smartthings", "Open/Closed Sensor", name, null, [name: "Device.${name}", label: value, completedSetup: true])
             }
+            else {
+            	existingDevice.label = value
+                existingDevice.take()
+                log.debug "device already exists: ${name}"
+
+            }
 
         }
     }
