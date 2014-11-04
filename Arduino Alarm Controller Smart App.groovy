@@ -20,6 +20,7 @@ preferences {
 	section("Zones") {
     	for (int i=1;i<=8;i++) {
 			input "zone" + i, title: "Zone " + i, "string", description:"Zone " + i, required: false
+            input "typezone" + i, "enum", title: "Type", options: ["Open/Closed Sensor","Motion Detector"], required: false
         }
         
 	}
@@ -57,15 +58,23 @@ def initialize() {
 		if (name.startsWith("zone")) {
 
             log.debug "checking device: ${name}, value: $value"
-
-
+			
+            def zoneType = settings["type" + name];
+			
+            if (zoneType == null || zoneType == "")
+            {
+            	zoneType = "Open/Closed Sensor"
+            }
+            
             def existingDevice = getChildDevice(name)
             if(!existingDevice) {
                 log.debug "creating device: ${name}"
-            	def childDevice = addChildDevice("smartthings", "Open/Closed Sensor", name, null, [name: "Device.${name}", label: value, completedSetup: true])
+            	def childDevice = addChildDevice("smartthings", zoneType, name, null, [name: "Device.${name}", label: value, completedSetup: true])
             }
             else {
-            	existingDevice.label = value
+            	//log.debug existingDevice.deviceType
+                //existingDevice.type = zoneType
+                existingDevice.label = value
                 existingDevice.take()
                 log.debug "device already exists: ${name}"
 
@@ -113,13 +122,23 @@ def zonestatusChanged(evt)
     if (device)
     {
     	log.debug "$device statusChanged $status"
-        //log.debug "${device.supportedCommands}"
-    	
-        //def zigbeevalue = status=="open" ? "zone report :: type: 19 value: 0031" : "zone report :: type: 19 value: 0030"
-        //def event = [deviceId: device.id, name:"contact",value:status, isStateChange:true];
-        //log.debug "sending event $event"
-       device.sendEvent(name: "contact", value: status, isStateChange:true)
-    
+        
+        def zoneType = settings["typezone" + zone];
+			
+        if (zoneType == null || zoneType == "")
+        {
+            zoneType = "Open/Closed Sensor"
+        }
+
+		def eventName = "contact"
+        
+        if (zoneType=="Motion Detector")
+        {
+        	eventName = "motion";
+            status = status=="open" ? "active" : "inactive"
+        }   
+        
+        device.sendEvent(name: eventName, value: status, isStateChange:true)
     }
     else {
     
