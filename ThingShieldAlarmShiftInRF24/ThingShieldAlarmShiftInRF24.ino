@@ -25,8 +25,8 @@
 
 
 
-#define PIN_THING_RX    0
-#define PIN_THING_TX    1
+#define PIN_THING_RX    3
+#define PIN_THING_TX    2
 
 /* How many shift register chips are daisy-chained.
 */
@@ -49,15 +49,13 @@
 */
 #define BYTES_VAL_T unsigned int
 
-int ploadPin        = 3; //8;  // Connects to Parallel load pin the 165
+int ploadPin        = 7; //8;  // Connects to Parallel load pin the 165
 //int clockEnablePin  = 9;  // Connects to Clock Enable pin the 165
-int dataPin         = 2; //11; // Connects to the Q7 pin the 165
+int dataPin         = 5; //11; // Connects to the Q7 pin the 165
 int clockPin        = 4; //12; // Connects to the Clock pin the 165
 
 BYTES_VAL_T pinValues;
 BYTES_VAL_T oldPinValues;
-
-
 
 #define ZONE_COUNT  8
 
@@ -70,35 +68,27 @@ bool isDebugEnabled = true;    // enable or disable debug in this example
 
 
 SmartThingsCallout_t messageCallout;    // call out function forward decalaration
-SmartThings smartthing(PIN_THING_RX, PIN_THING_TX, messageCallout, "GenericShield",true);  // constructor
+SmartThings smartthing(PIN_THING_RX, PIN_THING_TX, messageCallout, "GenericShield",false);  // constructor
 
 /***** Configure the chosen CE,CS pins *****/
 RF24 radio(8,10);
 RF24Network network(radio);
 RF24Mesh mesh(radio,network);
 
-
+long lastHeartbeat = 0;
+long heartbeatMs = 60000; // 1 min
 
 void setup()
 {
   // setup default state of global variables
-  isDebugEnabled = true;
 
   if (isDebugEnabled)
   { // setup debug serial port
     Serial.begin(57600);         // setup serial with a baud rate of 9600
     Serial.println("setup..");  // print out 'setup..' on start
-  }
+  }  
   
-  
-  Serial.println("Starting mesh network as Master Node");
-  
-    // Set the nodeID to 0 for the master node
-  mesh.setNodeID(0);
-  Serial.println(mesh.getNodeID());
-  // Connect to the mesh
-  mesh.begin();
-
+  setupWirelessMesh();
 
   setupWiredZones();
 }
@@ -130,7 +120,7 @@ void setupWiredZones() {
     
     boolean reading = (pinValues >> x) & 1;
 
-    String statusString= "zonestatus ";
+    String statusString= "wired ";
    
     statusString += zoneNum;
     
@@ -143,12 +133,23 @@ void setupWiredZones() {
     zoneStates[x] = reading;
                  
     zoneTimes[x] = millis();    
-     
-    
+         
   }
-   
   
+}
+
+
+void setupWirelessMesh() {
+ 
   
+  Serial.println("Starting mesh network as Master Node");
+  
+    // Set the nodeID to 0 for the master node
+  mesh.setNodeID(0);
+  Serial.println(mesh.getNodeID());
+  // Connect to the mesh
+  mesh.begin();
+
   
 }
 
@@ -156,32 +157,23 @@ void loop()
 {
   smartthing.run();
 
+  if (lastHeartbeat==0 || (millis() - lastHeartbeat) > heartbeatMs) {
+    lastHeartbeat = millis();
+    
+    
+    String statusString= "heartbeat ";
+    statusString += lastHeartbeat;
+    
+    Serial.print("sending ");
+    Serial.println(statusString);
+    
+     smartthing.send(statusString);
+
+  }
+  
   updateWiredZones();
   
-  
-  // Call mesh.update to keep the network updated
-  mesh.update();
-  
-  // In addition, keep the 'DHCP service' running on the master node so addresses will
-  // be assigned to the sensor nodes
-  mesh.DHCP();
-  
-  
-  // Check for incoming data from the sensors
-  if(network.available()){
-    RF24NetworkHeader header;
-    network.peek(header);
-    
-    boolean dat=0;
-    switch(header.type){
-      // Display the incoming millis() values from the sensor nodes
-      case 'S': network.read(header,&dat,sizeof(dat)); Serial.println(dat); break;
-      default: 
-        network.read(header,0,0); 
-        Serial.println(header.type);
-        break;
-    }
-  }
+  updateWirelessZones();
   
   
 }
@@ -209,7 +201,7 @@ void updateWiredZones() {
          if ((millis() - zoneTimes[x]) > debouncedelay) {
                       
                             
-            String statusString= "zonestatus ";
+            String statusString= "wired ";
            
             statusString += zoneNum;
             
@@ -231,6 +223,39 @@ void updateWiredZones() {
 
 }
 
+
+void updateWirelessZones() {
+ 
+ 
+  // Call mesh.update to keep the network updated
+  mesh.update();
+  
+  // In addition, keep the 'DHCP service' running on the master node so addresses will
+  // be assigned to the sensor nodes
+  mesh.DHCP();
+  
+  
+  // Check for incoming data from the sensors
+  if(network.available()){
+    RF24NetworkHeader header;        // If so, grab it and print it out
+    byte reading;
+    network.read(header,&reading,sizeof(reading));
+    
+    String statusString= "wireless ";
+   
+    char device = header.type;
+    statusString += device;
+    statusString += " ";
+    statusString += reading;
+    
+    Serial.println(statusString);
+    smartthing.send(statusString);
+    
+  }
+   
+  
+  
+}
 
 void messageCallout(String message)
 {
