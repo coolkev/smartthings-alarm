@@ -15,13 +15,30 @@
 
 #include <SoftwareSerial.h>   //TODO need to set due to some weird wire language linker, should we absorb this whole library into smartthings
 #include <SmartThings.h>
-#include "RF24.h"
-#include "RF24Network.h"
-#include "RF24Mesh.h"
-#include <SPI.h>
 
-//Include eeprom.h for AVR (Uno, Nano) etc. except ATTiny
-#include <EEPROM.h>
+
+#define USE_RF24_MESH
+
+#if defined USE_RF24_MESH
+  #include "RF24.h"
+  #include "RF24Network.h"
+  #include "RF24Mesh.h"
+  #include <SPI.h>
+  
+  //Include eeprom.h for AVR (Uno, Nano) etc. except ATTiny
+  #include <EEPROM.h>
+#endif 
+
+
+#define USE_SERIAL_ZONES
+
+#if defined USE_SERIAL_ZONES
+  #include <SoftwareSerial.h>
+  
+  SoftwareSerial mySerial(A0, A1); // RX, TX
+
+#endif
+
 
 #define PIN_THING_RX    3
 #define PIN_THING_TX    2
@@ -52,12 +69,16 @@ bool isDebugEnabled = true;    // enable or disable debug in this example
 
 
 SmartThingsCallout_t messageCallout;    // call out function forward decalaration
-SmartThings smartthing(PIN_THING_RX, PIN_THING_TX, messageCallout, "GenericShield",false);  // constructor
+SmartThings smartthing(PIN_THING_RX, PIN_THING_TX, messageCallout, "GenericShield",true);  // constructor
 
-/***** Configure the chosen CE,CS pins *****/
-RF24 radio(8,10);
-RF24Network network(radio);
-RF24Mesh mesh(radio,network);
+#if defined USE_RF24_MESH
+  /***** Configure the chosen CE,CS pins *****/
+  RF24 radio(8,10);
+  RF24Network network(radio);
+  RF24Mesh mesh(radio,network);
+#endif
+
+
 
 long lastHeartbeat = 0;
 long heartbeatMs = 60000; // 1 min
@@ -73,11 +94,15 @@ void setup()
     Serial.begin(57600);         // setup serial with a baud rate of 9600
     Serial.println("setup..");  // print out 'setup..' on start
   }  
-  
-  //setupWirelessMesh();
+#if defined USE_RF24_MESH
+  setupWirelessMesh();
+#endif
 
   setupWiredZones();
   
+#if defined USE_SERIAL_ZONES
+  mySerial.begin(9600);
+#endif
 }
 
 
@@ -97,10 +122,10 @@ void setupWiredZones() {
   
 }
 
-
+#if defined USE_RF24_MESH
 void setupWirelessMesh() {
  
-  
+
   Serial.println("Starting mesh network as Master Node");
   
     // Set the nodeID to 0 for the master node
@@ -111,17 +136,27 @@ void setupWirelessMesh() {
 
   
 }
+#endif
 
 void loop()
 {
   smartthing.run();
 
+#if defined USE_SERIAL_ZONES
+  updateSerialZones();
+#endif
+
   sendHeartbeat();
   
   updateWiredZones();
   
-  //updateWirelessZones();
-  
+
+#if defined USE_RF24_MESH
+  updateWirelessZones();
+#endif  
+
+
+
   
 }
 
@@ -157,9 +192,6 @@ void updateWiredZones() {
        return; 
     }
 
-    Serial.print("newPinValues="); 
-    Serial.println(newPinValues);
-        
     for (int x = 0; x<DATA_WIDTH; x++) {
       
       boolean prevReading = (pinValues >> x) & 1;
@@ -177,7 +209,7 @@ void updateWiredZones() {
         
        
         Serial.println(statusString);
-        //smartthing.send(statusString);
+        smartthing.send(statusString);
         
            
       }
@@ -189,7 +221,7 @@ void updateWiredZones() {
 
 }
 
-
+#if defined USE_RF24_MESH
 void updateWirelessZones() {
  
  
@@ -222,6 +254,48 @@ void updateWirelessZones() {
   
   
 }
+#endif
+
+
+#if defined USE_SERIAL_ZONES
+  void updateSerialZones() {
+    
+    if (!mySerial.available())
+      return;
+  
+    Serial.println("Receiving serial data");
+  
+    String content = "";
+    char character;
+    
+     while(mySerial.available()) {
+      character = mySerial.read();
+      
+      if (character==10 || character==13)
+        break;
+      
+      // characters out of range will cause us to just throw out this whole reading
+      if (character!=13 && (character>=127 || character<32))
+      {  
+         Serial.println("Character out of range - ignoring serial data");
+         Serial.println(character,DEC);
+         while(mySerial.available()) {
+            mySerial.read(); 
+         }
+         return; 
+      }
+      content.concat(character);
+    }
+
+  if (content != "") {
+    Serial.println(content);
+    smartthing.send(content);
+  }
+    
+    
+ }
+#endif
+  
 
 void messageCallout(String message)
 {
