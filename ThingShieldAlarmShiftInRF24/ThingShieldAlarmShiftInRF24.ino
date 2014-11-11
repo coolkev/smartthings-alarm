@@ -15,56 +15,40 @@
 
 #include <SoftwareSerial.h>   //TODO need to set due to some weird wire language linker, should we absorb this whole library into smartthings
 #include <SmartThings.h>
-
 #include "RF24.h"
 #include "RF24Network.h"
 #include "RF24Mesh.h"
 #include <SPI.h>
+
 //Include eeprom.h for AVR (Uno, Nano) etc. except ATTiny
 #include <EEPROM.h>
-
-
 
 #define PIN_THING_RX    3
 #define PIN_THING_TX    2
 
-/* How many shift register chips are daisy-chained.
-*/
+
+/* Type of Shift Register - uncomment only one of the following lines depending on the type of shift register being used */
+//#define SHIFT_REGISTER_CD4021B
+#define SHIFT_REGISTER_74HC165
+
+
+/* How many shift register chips are daisy-chained. */
 #define NUMBER_OF_SHIFT_CHIPS   1
 
-/* Width of data (how many ext lines).
-*/
+/* Width of data (how many ext lines). */
 #define DATA_WIDTH   NUMBER_OF_SHIFT_CHIPS * 8
 
-/* Width of pulse to trigger the shift register to read and latch.
-*/
+/* Width of pulse to trigger the shift register to read and latch. */
 #define PULSE_WIDTH_USEC   5
 
-/* Optional delay between shift register reads.
-*/
-#define POLL_DELAY_MSEC   1
+int latchPin = 7; //Calin = 5
+int dataPin = 5; //Calin = 7
+int clockPin = 4;
 
-/* You will need to change the "int" to "long" If the
- * NUMBER_OF_SHIFT_CHIPS is higher than 2.
-*/
-#define BYTES_VAL_T unsigned int
-
-int ploadPin        = 7; //8;  // Connects to Parallel load pin the 165
-//int clockEnablePin  = 9;  // Connects to Clock Enable pin the 165
-int dataPin         = 5; //11; // Connects to the Q7 pin the 165
-int clockPin        = 4; //12; // Connects to the Clock pin the 165
-
-BYTES_VAL_T pinValues;
-BYTES_VAL_T oldPinValues;
-
-#define ZONE_COUNT  8
-
-boolean zoneStates[ZONE_COUNT];
-long zoneTimes[ZONE_COUNT];         // the last time the output pin was toggled
-
-long debouncedelay = 10; 
+int pinValues = 0;
 
 bool isDebugEnabled = true;    // enable or disable debug in this example
+
 
 
 SmartThingsCallout_t messageCallout;    // call out function forward decalaration
@@ -78,6 +62,8 @@ RF24Mesh mesh(radio,network);
 long lastHeartbeat = 0;
 long heartbeatMs = 60000; // 1 min
 
+boolean openstate = true; // false if using pull-down resistors, true if using pull-up resistors
+
 void setup()
 {
   // setup default state of global variables
@@ -88,9 +74,10 @@ void setup()
     Serial.println("setup..");  // print out 'setup..' on start
   }  
   
-  setupWirelessMesh();
+  //setupWirelessMesh();
 
   setupWiredZones();
+  
 }
 
 
@@ -99,42 +86,14 @@ void setupWiredZones() {
  
  
     Serial.println("Checking initial zone states");
-    
-    pinMode(ploadPin, OUTPUT);
-   // pinMode(clockEnablePin, OUTPUT);
-    pinMode(clockPin, OUTPUT);
+      
+    //define pin modes
+    pinMode(latchPin, OUTPUT);
+    pinMode(clockPin, OUTPUT); 
     pinMode(dataPin, INPUT);
 
-    digitalWrite(clockPin, LOW);
-    digitalWrite(ploadPin, HIGH);
 
-    /* Read in and display the pin states at startup.
-    */
-    pinValues = read_shift_regs();
-
-    oldPinValues = pinValues;
-    
-  for (int x = 0; x<ZONE_COUNT; x++) {
-    
-    int zoneNum = x+1;
-    
-    boolean reading = (pinValues >> x) & 1;
-
-    String statusString= "wired ";
-   
-    statusString += zoneNum;
-    
-    statusString += reading ? " open" : " closed";
-    
- 
-    Serial.println(statusString);
-    smartthing.send(statusString);
-    
-    zoneStates[x] = reading;
-                 
-    zoneTimes[x] = millis();    
-         
-  }
+  
   
 }
 
@@ -157,6 +116,17 @@ void loop()
 {
   smartthing.run();
 
+  sendHeartbeat();
+  
+  updateWiredZones();
+  
+  //updateWirelessZones();
+  
+  
+}
+
+void sendHeartbeat() {
+  
   if (lastHeartbeat==0 || (millis() - lastHeartbeat) > heartbeatMs) {
     lastHeartbeat = millis();
     
@@ -171,55 +141,51 @@ void loop()
 
   }
   
-  updateWiredZones();
-  
-  updateWirelessZones();
-  
   
 }
 
-
-
 void updateWiredZones() {
 
-  pinValues = read_shift_regs();
   
-  if (pinValues==oldPinValues)  {
-   return; 
-  }
 
-  oldPinValues = pinValues;
-  
-  for (int x = 0; x<ZONE_COUNT; x++) {
-  
-    boolean reading = (pinValues >> x) & 1;
-    
-    int zoneNum = x+1;
-    if (reading!=zoneStates[x])
-    {
-       
-         if ((millis() - zoneTimes[x]) > debouncedelay) {
-                      
-                            
-            String statusString= "wired ";
-           
-            statusString += zoneNum;
-            
-            statusString += reading ? " open" : " closed";
-            
-            Serial.println(statusString);
-            smartthing.send(statusString);
-    
-            zoneStates[x] = reading;
-            
-        }
+    /* Read in and display the pin states at startup.
+    */
+    int newPinValues = shiftIn(latchPin, dataPin, clockPin);
+
+    if (newPinValues==pinValues)  {
+      //nothing has changed
+       return; 
+    }
+
+    Serial.print("newPinValues="); 
+    Serial.println(newPinValues);
         
-        zoneTimes[x] = millis();    
-     
-     }
+    for (int x = 0; x<DATA_WIDTH; x++) {
+      
+      boolean prevReading = (pinValues >> x) & 1;
+      boolean newReading = (newPinValues >> x) & 1;
+            
+      if (newReading!=prevReading)
+      {
+                  
+           
+        String statusString= "wired ";
+       
+        statusString += x+1;
+        
+        statusString += newReading==openstate ? " open" : " closed";
+        
+       
+        Serial.println(statusString);
+        //smartthing.send(statusString);
+        
+           
+      }
     
-  }
-
+    }
+    
+    pinValues = newPinValues;
+  
 
 }
 
@@ -285,44 +251,56 @@ void messageCallout(String message)
 
 
 
-/* This function is essentially a "shift-in" routine reading the
- * serial Data from the shift register chips and representing
- * the state of those pins in an unsigned integer (or long).
-*/
-BYTES_VAL_T read_shift_regs()
-{
-    long bitVal;
-    BYTES_VAL_T bytesVal = 0;
+#if defined SHIFT_REGISTER_CD4021B
+int shiftIn(int myLatchPin, int myDataPin, int myClockPin) { 
+  int pinState;
+  int result = 0;
 
-    /* Trigger a parallel Load to latch the state of the data lines,
-    */
-    //digitalWrite(clockEnablePin, HIGH);
-    digitalWrite(ploadPin, LOW);
+
+    digitalWrite(myLatchPin,HIGH);
+    delayMicroseconds(20);
+    digitalWrite(myLatchPin,LOW);
+
+
+  for (int i=DATA_WIDTH-1; i>=0; i--)
+  {
+    digitalWrite(myClockPin, LOW);
     delayMicroseconds(PULSE_WIDTH_USEC);
-    digitalWrite(ploadPin, HIGH);
-    //digitalWrite(clockEnablePin, LOW);
 
-    
-    /* Loop to read each bit value from the serial out line
-     * of the SN74HC165N.
-    */
-    for(int i = 0; i < DATA_WIDTH; i++)
-    {
-        bitVal = digitalRead(dataPin);
+    pinState = digitalRead(myDataPin);
+    result |= (pinState << i);
 
-        /* Set the corresponding bit in bytesVal.
-        */
-        bytesVal |= (bitVal << ((DATA_WIDTH-1) - i));
+    digitalWrite(myClockPin, HIGH);
 
-        /* Pulse the Clock (rising edge shifts the next bit).
-        */
-        digitalWrite(clockPin, HIGH);
-        delayMicroseconds(PULSE_WIDTH_USEC);
-        digitalWrite(clockPin, LOW);
-    }
-
-    return(bytesVal);
+  }
+  
+  return result;
 }
+#endif
+#if defined SHIFT_REGISTER_74HC165
+int shiftIn(int myLatchPin, int myDataPin, int myClockPin) { 
+
+  int pinState;
+  int result = 0;
+  
+
+    digitalWrite(myLatchPin, LOW);
+    delayMicroseconds(20);
+    digitalWrite(myLatchPin, HIGH);
 
 
+  for (int i=0; i< DATA_WIDTH; i++)
+  {
+    
+    digitalWrite(myClockPin, LOW);
+    pinState = digitalRead(myDataPin);
+    result |= (pinState << (DATA_WIDTH-1-i));
 
+    digitalWrite(myClockPin, HIGH);
+    delayMicroseconds(PULSE_WIDTH_USEC);
+
+  }
+  
+  return result;
+}
+#endif
