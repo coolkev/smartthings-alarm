@@ -13,11 +13,14 @@
  */
 //*****************************************************************************
 
-#include <SoftwareSerial.h>   //TODO need to set due to some weird wire language linker, should we absorb this whole library into smartthings
-#include <SmartThings.h>
+#define USE_SMARTTHINGS
 
+#if defined USE_SMARTTHINGS
+  #include <SoftwareSerial.h>   //TODO need to set due to some weird wire language linker, should we absorb this whole library into smartthings
+  #include <SmartThings.h>
+#endif 
 
-#define USE_RF24_MESH
+//#define USE_RF24_MESH
 
 #if defined USE_RF24_MESH
   #include "RF24.h"
@@ -29,19 +32,6 @@
   #include <EEPROM.h>
 #endif 
 
-
-#define USE_SERIAL_ZONES
-
-#if defined USE_SERIAL_ZONES
-  #include <SoftwareSerial.h>
-  
-  SoftwareSerial mySerial(A0, A1); // RX, TX
-
-#endif
-
-
-#define PIN_THING_RX    3
-#define PIN_THING_TX    2
 
 
 /* Type of Shift Register - uncomment only one of the following lines depending on the type of shift register being used */
@@ -62,14 +52,30 @@ int latchPin = 7; //Calin = 5
 int dataPin = 5; //Calin = 7
 int clockPin = 4;
 
-int pinValues = 0;
+int pinValues = -1;
 
 bool isDebugEnabled = true;    // enable or disable debug in this example
 
+int lastHeartbeat = 0;
+long heartbeatMs = 10000; // 1 min
+
+int doorbellPin = A5;
+String doorbellPushedCommand = "w 12 1";
+int doorbellState = HIGH;
+
+boolean openstate = true; // false if using pull-down resistors, true if using pull-up resistors
 
 
-SmartThingsCallout_t messageCallout;    // call out function forward decalaration
-SmartThings smartthing(PIN_THING_RX, PIN_THING_TX, messageCallout, "GenericShield",true);  // constructor
+String inputString = "";         // a string to hold incoming data
+boolean stringComplete = false;  // whether the string is complete
+
+#if defined USE_SMARTTHINGS
+  
+  #define PIN_THING_RX    3
+  #define PIN_THING_TX    2
+  SmartThingsCallout_t messageCallout;    // call out function forward decalaration
+  SmartThings smartthing(PIN_THING_RX, PIN_THING_TX, messageCallout, "GenericShield",false);  // constructor
+#endif
 
 #if defined USE_RF24_MESH
   /***** Configure the chosen CE,CS pins *****/
@@ -80,46 +86,20 @@ SmartThings smartthing(PIN_THING_RX, PIN_THING_TX, messageCallout, "GenericShiel
 
 
 
-long lastHeartbeat = 0;
-long heartbeatMs = 60000; // 1 min
-
-boolean openstate = true; // false if using pull-down resistors, true if using pull-up resistors
-
-void setup()
-{
-  // setup default state of global variables
-
-  if (isDebugEnabled)
-  { // setup debug serial port
-    Serial.begin(57600);         // setup serial with a baud rate of 9600
-    Serial.println("setup..");  // print out 'setup..' on start
-  }  
-#if defined USE_RF24_MESH
-  setupWirelessMesh();
-#endif
-
-  setupWiredZones();
-  
-#if defined USE_SERIAL_ZONES
-  mySerial.begin(9600);
-#endif
-}
-
 
 
 void setupWiredZones() {
  
  
-    Serial.println("Checking initial zone states");
       
     //define pin modes
     pinMode(latchPin, OUTPUT);
     pinMode(clockPin, OUTPUT); 
     pinMode(dataPin, INPUT);
 
-
   
-  
+    pinMode(doorbellPin, INPUT);
+    digitalWrite(doorbellPin, HIGH);
 }
 
 #if defined USE_RF24_MESH
@@ -136,44 +116,24 @@ void setupWirelessMesh() {
 
   
 }
+
 #endif
-
-void loop()
-{
-  smartthing.run();
-
-#if defined USE_SERIAL_ZONES
-  updateSerialZones();
-#endif
-
-  sendHeartbeat();
-  
-  updateWiredZones();
-  
-
-#if defined USE_RF24_MESH
-  updateWirelessZones();
-#endif  
-
-
-
-  
-}
-
 void sendHeartbeat() {
   
-  if (lastHeartbeat==0 || (millis() - lastHeartbeat) > heartbeatMs) {
-    lastHeartbeat = millis();
+  if (((millis()) - lastHeartbeat*heartbeatMs) > heartbeatMs) {
+      
+    //Serial.print("(millis()/heartbeatMs) - lastHeartbeat=");
+    //Serial.println((millis()/heartbeatMs) - lastHeartbeat);
     
     
-    String statusString= "heartbeat ";
+    lastHeartbeat = millis()/heartbeatMs;
+    
+    
+    String statusString= "hb ";
     statusString += lastHeartbeat;
+   
     
-    Serial.print("sending ");
-    Serial.println(statusString);
-    
-     smartthing.send(statusString);
-
+    smartthingsend(statusString);
   }
   
   
@@ -181,7 +141,15 @@ void sendHeartbeat() {
 
 void updateWiredZones() {
 
+  doorbellPin = A5;
   
+  int newDoorbellState = digitalRead(doorbellPin);
+  if (newDoorbellState == LOW && newDoorbellState != doorbellState)
+  {
+      Serial.print("doorbell pressed");
+      
+      smartthingsend(doorbellPushedCommand);
+  }
 
     /* Read in and display the pin states at startup.
     */
@@ -192,26 +160,28 @@ void updateWiredZones() {
        return; 
     }
 
+    Serial.print("newPinValues=");
+    Serial.println(newPinValues);
+    
     for (int x = 0; x<DATA_WIDTH; x++) {
       
       boolean prevReading = (pinValues >> x) & 1;
       boolean newReading = (newPinValues >> x) & 1;
             
-      if (newReading!=prevReading)
+      if (pinValues==-1 || newReading!=prevReading)
       {
                   
            
-        String statusString= "wired ";
+        String statusString= "w ";
        
         statusString += x+1;
         
-        statusString += newReading==openstate ? " open" : " closed";
+        statusString += newReading==openstate ? " 0" : " 1";
         
        
-        Serial.println(statusString);
-        smartthing.send(statusString);
+        smartthingsend(statusString);
+          
         
-           
       }
     
     }
@@ -239,63 +209,93 @@ void updateWirelessZones() {
     byte reading;
     network.read(header,&reading,sizeof(reading));
     
-    String statusString= "wireless ";
+    String statusString= "r ";
    
     char device = header.type;
     statusString += device;
     statusString += " ";
     statusString += reading;
     
-    Serial.println(statusString);
-    smartthing.send(statusString);
-    
+    smartthingsend(statusString);
   }
    
   
   
 }
+
 #endif
 
-
-#if defined USE_SERIAL_ZONES
-  void updateSerialZones() {
-    
-    if (!mySerial.available())
-      return;
+void smartthingsend(String message) {
+ 
+     
+    Serial.print(message);
   
-    Serial.println("Receiving serial data");
-  
-    String content = "";
-    char character;
-    
-     while(mySerial.available()) {
-      character = mySerial.read();
-      
-      if (character==10 || character==13)
-        break;
-      
-      // characters out of range will cause us to just throw out this whole reading
-      if (character!=13 && (character>=127 || character<32))
-      {  
-         Serial.println("Character out of range - ignoring serial data");
-         Serial.println(character,DEC);
-         while(mySerial.available()) {
-            mySerial.read(); 
-         }
-         return; 
-      }
-      content.concat(character);
-    }
+long start = millis();
 
-  if (content != "") {
-    Serial.println(content);
-    smartthing.send(content);
-  }
-    
-    
- }
+#if defined USE_SMARTTHINGS      
+    smartthing.send(message);
 #endif
+
+int duration = millis()-start;  
   
+  Serial.print(" (took ");
+  Serial.print(duration);
+  Serial.println(" ms)");  
+  
+}
+
+
+//#if defined USE_SERIAL_ZONES
+//  void updateSerialZones() {
+//    
+////    if (!mySerial.isListening()) {
+////      Serial.println("serial not listening - calling listen()");
+////      mySerial.listen();
+////    }
+//    
+//    if (!Serial.available()) {
+//      //mySerial.end();
+//      return;
+//    }  
+//    Serial.println("Receiving serial data");
+//  
+//    String content = "";
+//    char character;
+//    
+//     while(Serial.available()) {
+//      character = Serial.read();
+//      
+//      if (character==10 || character==13)
+//        break;
+//      
+//      // characters out of range will cause us to just throw out this whole reading
+//      if (character!=13 && (character>=127 || character<32))
+//      {  
+//         Serial.println("Character out of range - ignoring serial data");
+//         Serial.println(character,DEC);
+//         while(Serial.available()) {
+//            Serial.read(); 
+//         }
+//         return; 
+//      }
+//      content.concat(character);
+//    }
+//
+//    //mySerial.end();
+//      
+//  if (content != "") {
+//    Serial.println(content);
+//    
+//    #if defined USE_SMARTTHINGS
+//      smartthing.send(content);
+//    #endif
+//    delay(100);
+//  }
+//    
+//    
+// }
+//  
+//#endif
 
 void messageCallout(String message)
 {
@@ -378,3 +378,66 @@ int shiftIn(int myLatchPin, int myDataPin, int myClockPin) {
   return result;
 }
 #endif
+
+
+void loop()
+{
+  
+  
+#if defined USE_SMARTTHINGS
+  smartthing.run();
+#endif
+
+  updateWiredZones();
+  
+  sendHeartbeat();
+
+#if defined USE_RF24_MESH
+  updateWirelessZones();
+#endif  
+
+  if (stringComplete) {
+    smartthingsend(inputString);
+    // clear the string:
+    inputString = "";
+    stringComplete = false;
+  }
+  
+}
+
+void setup()
+{
+  // setup default state of global variables
+
+
+  Serial.begin(9600);         // setup serial with a baud rate of 9600
+  Serial.println("setup..");  // print out 'setup..' on start
+
+  #if defined USE_RF24_MESH
+  
+    setupWirelessMesh();
+    
+  #endif
+
+  setupWiredZones();
+  
+  inputString.reserve(200);
+}
+
+
+void serialEvent() {
+  while (Serial.available()) {
+    // get the new byte:
+    char inChar = (char)Serial.read(); 
+    // add it to the inputString:
+    
+    // if the incoming character is a newline, set a flag
+    // so the main loop can do something about it:
+    if (inChar == '\n') {
+      stringComplete = true;
+    } 
+    else if (inChar<127 && inChar>=32) {
+      inputString += inChar;
+    }
+  }
+}
