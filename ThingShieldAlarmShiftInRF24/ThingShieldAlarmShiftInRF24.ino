@@ -20,17 +20,33 @@
   #include <SmartThings.h>
 #endif 
 
+#include <SoftEasyTransfer.h>
+
+SoftwareSerial mySerial(A3, A4); // RX, TX
+
+SoftEasyTransfer ET; 
+
+struct SEND_DATA_STRUCTURE{
+  //put your variable definitions here for the data you want to send
+  //THIS MUST BE EXACTLY THE SAME ON THE OTHER ARDUINO
+  byte sensor;
+  int reading;
+};
+
+//give a name to the group of data
+SEND_DATA_STRUCTURE mydata;
+
 //#define USE_RF24_MESH
 
-#if defined USE_RF24_MESH
-  #include "RF24.h"
-  #include "RF24Network.h"
-  #include "RF24Mesh.h"
-  #include <SPI.h>
-  
-  //Include eeprom.h for AVR (Uno, Nano) etc. except ATTiny
-  #include <EEPROM.h>
-#endif 
+//#if defined USE_RF24_MESH
+//  #include "RF24.h"
+//  #include "RF24Network.h"
+//  #include "RF24Mesh.h"
+//  #include <SPI.h>
+//  
+//  //Include eeprom.h for AVR (Uno, Nano) etc. except ATTiny
+//  #include <EEPROM.h>
+//#endif 
 
 
 
@@ -46,10 +62,10 @@
 #define DATA_WIDTH   NUMBER_OF_SHIFT_CHIPS * 8
 
 /* Width of pulse to trigger the shift register to read and latch. */
-#define PULSE_WIDTH_USEC   5
+#define PULSE_WIDTH_USEC   2
 
-int latchPin = 7; //Calin = 5
-int dataPin = 5; //Calin = 7
+int latchPin = 7;
+int dataPin = 5;
 int clockPin = 4;
 
 int pinValues = -1;
@@ -57,17 +73,35 @@ int pinValues = -1;
 bool isDebugEnabled = true;    // enable or disable debug in this example
 
 int lastHeartbeat = 0;
-long heartbeatMs = 10000; // 1 min
+long heartbeatMs = 60000; // 1 min
 
-int doorbellPin = A5;
-String doorbellPushedCommand = "w 12 1";
-int doorbellState = HIGH;
+#define DOORBELL_NOTIFY
+#if defined DOORBELL_NOTIFY
+  int doorbellPin = A5;
+  String doorbellPushedCommand = "w 11 1";
+  int doorbellState = HIGH;
+#endif
+
+//#define TEMP_SENSORS
+#if defined TEMP_SENSORS
+  //#include <OneWire.h>
+//#endif
+//#if defined TEMP_SENSORS
+  int tempDeviceStart = 12;
+  int temppin = 8;
+  OneWire ds(temppin);  // on pin 10 (a 4.7K resistor is necessary)
+  float temperature[10];
+  long temperatureAt = 0;
+  long temperatureInterval = 10000; // only check temp every 10 secs
+
+
+#endif
 
 boolean openstate = true; // false if using pull-down resistors, true if using pull-up resistors
 
 
-String inputString = "";         // a string to hold incoming data
-boolean stringComplete = false;  // whether the string is complete
+//String inputString = "";         // a string to hold incoming data
+//boolean stringComplete = false;  // whether the string is complete
 
 #if defined USE_SMARTTHINGS
   
@@ -79,7 +113,7 @@ boolean stringComplete = false;  // whether the string is complete
 
 #if defined USE_RF24_MESH
   /***** Configure the chosen CE,CS pins *****/
-  RF24 radio(8,10);
+  RF24 radio(7,8);
   RF24Network network(radio);
   RF24Mesh mesh(radio,network);
 #endif
@@ -97,9 +131,10 @@ void setupWiredZones() {
     pinMode(clockPin, OUTPUT); 
     pinMode(dataPin, INPUT);
 
-  
+    #if defined DOORBELL_NOTIFY
     pinMode(doorbellPin, INPUT);
     digitalWrite(doorbellPin, HIGH);
+    #endif
 }
 
 #if defined USE_RF24_MESH
@@ -114,6 +149,7 @@ void setupWirelessMesh() {
   // Connect to the mesh
   mesh.begin();
 
+  radio.printDetails();
   
 }
 
@@ -141,8 +177,8 @@ void sendHeartbeat() {
 
 void updateWiredZones() {
 
-  doorbellPin = A5;
   
+  #if defined DOORBELL_NOTIFY
   int newDoorbellState = digitalRead(doorbellPin);
   if (newDoorbellState == LOW && newDoorbellState != doorbellState)
   {
@@ -150,7 +186,8 @@ void updateWiredZones() {
       
       smartthingsend(doorbellPushedCommand);
   }
-
+  #endif
+  
     /* Read in and display the pin states at startup.
     */
     int newPinValues = shiftIn(latchPin, dataPin, clockPin);
@@ -244,58 +281,6 @@ int duration = millis()-start;
   
 }
 
-
-//#if defined USE_SERIAL_ZONES
-//  void updateSerialZones() {
-//    
-////    if (!mySerial.isListening()) {
-////      Serial.println("serial not listening - calling listen()");
-////      mySerial.listen();
-////    }
-//    
-//    if (!Serial.available()) {
-//      //mySerial.end();
-//      return;
-//    }  
-//    Serial.println("Receiving serial data");
-//  
-//    String content = "";
-//    char character;
-//    
-//     while(Serial.available()) {
-//      character = Serial.read();
-//      
-//      if (character==10 || character==13)
-//        break;
-//      
-//      // characters out of range will cause us to just throw out this whole reading
-//      if (character!=13 && (character>=127 || character<32))
-//      {  
-//         Serial.println("Character out of range - ignoring serial data");
-//         Serial.println(character,DEC);
-//         while(Serial.available()) {
-//            Serial.read(); 
-//         }
-//         return; 
-//      }
-//      content.concat(character);
-//    }
-//
-//    //mySerial.end();
-//      
-//  if (content != "") {
-//    Serial.println(content);
-//    
-//    #if defined USE_SMARTTHINGS
-//      smartthing.send(content);
-//    #endif
-//    delay(100);
-//  }
-//    
-//    
-// }
-//  
-//#endif
 
 void messageCallout(String message)
 {
@@ -396,12 +381,33 @@ void loop()
   updateWirelessZones();
 #endif  
 
-  if (stringComplete) {
-    smartthingsend(inputString);
-    // clear the string:
-    inputString = "";
-    stringComplete = false;
+//  if (stringComplete) {
+//    smartthingsend(inputString);
+//    // clear the string:
+//    inputString = "";
+//    stringComplete = false;
+//  }
+  
+  
+  
+  
+  #if defined TEMP_SENSORS
+    readTemperature(false);
+   #endif
+   
+   
+   //check and see if a data packet has come in. 
+  if(ET.receiveData()){
+    
+    String statusString = "w ";
+    statusString += mydata.sensor;
+    statusString += " ";
+    statusString += mydata.reading;
+
+    smartthingsend(statusString);
+    
   }
+  
   
 }
 
@@ -410,9 +416,13 @@ void setup()
   // setup default state of global variables
 
 
-  Serial.begin(9600);         // setup serial with a baud rate of 9600
+  Serial.begin(4800);         // setup serial with a baud rate of 9600
   Serial.println("setup..");  // print out 'setup..' on start
 
+  mySerial.begin(9600);
+  //start the library, pass in the data details and the name of the serial port.
+  ET.begin(details(mydata), &mySerial);
+  
   #if defined USE_RF24_MESH
   
     setupWirelessMesh();
@@ -421,23 +431,182 @@ void setup()
 
   setupWiredZones();
   
-  inputString.reserve(200);
+//  inputString.reserve(10);
+  
+  
+  #if defined TEMP_SENSORS
+    readTemperature(true);
+   #endif
 }
 
 
-void serialEvent() {
-  while (Serial.available()) {
-    // get the new byte:
-    char inChar = (char)Serial.read(); 
-    // add it to the inputString:
+//void serialEvent() {
+//  while (Serial.available()) {
+//    // get the new byte:
+//    char inChar = (char)Serial.read(); 
+//    // add it to the inputString:
+//    
+//    // if the incoming character is a newline, set a flag
+//    // so the main loop can do something about it:
+//    if (inChar == '\n') {
+//      stringComplete = true;
+//    } 
+//    else if (inChar<127 && inChar>=32) {
+//      inputString += inChar;
+//    }
+//  }
+//}
+
+
+
+#if defined TEMP_SENSORS
+void readTemperature(boolean printChipInfo) {
+ 
+  
+  if (temperatureAt+temperatureInterval > millis()) {
     
-    // if the incoming character is a newline, set a flag
-    // so the main loop can do something about it:
-    if (inChar == '\n') {
-      stringComplete = true;
-    } 
-    else if (inChar<127 && inChar>=32) {
-      inputString += inChar;
-    }
+    return;
+    
   }
+
+  temperatureAt = millis();
+
+  //Serial.println("checking Temp");
+  
+  ds.reset_search();
+  int sensorNum = 0;
+  
+  byte addr[8];
+    
+  while (ds.search(addr)) {
+    
+    Serial.print("ROM =");
+    for(int i = 0; i < 8; i++) {
+      Serial.write(' ');
+      Serial.print(addr[i], HEX);
+    }
+    
+    byte i;
+    byte present = 0;
+    byte type_s;
+    byte data[12];
+    float celsius, fahrenheit;
+    
+    if (OneWire::crc8(addr, 7) != addr[7]) {
+        Serial.println("CRC is not valid!");
+        return;
+    }
+    //Serial.println();
+   String chipInfo;
+    // the first ROM byte indicates which chip
+    switch (addr[0]) {
+      case 0x10:
+        chipInfo = "  Chip = DS18S20";  // or old DS1820
+        type_s = 1;
+        break;
+      case 0x28:
+        chipInfo = "  Chip = DS18B20";
+        type_s = 0;
+        break;
+      case 0x22:
+        chipInfo = "  Chip = DS1822";
+        type_s = 0;
+        break;
+      default:
+        chipInfo = "Device is not a DS18x20 family device.";
+        return;
+    } 
+  
+    //if (printChipInfo) {
+      
+        Serial.println(chipInfo);
+        
+    //}
+    //if (temperatureAt==0) {
+        
+      ds.reset();
+      ds.select(addr);
+      ds.write(0x44, 0);        // start conversion, with parasite power on at the end
+      
+      delay(1000);
+      
+      //delay(1000);     // maybe 750ms is enough, maybe not
+    // we might do a ds.depower() here, but the reset will take care of it.
+    //}
+    
+    present = ds.reset();
+    ds.select(addr);    
+    ds.write(0xBE);         // Read Scratchpad
+  
+//    Serial.print("  Data = ");
+//    Serial.print(present, HEX);
+//    Serial.print(" ");
+    for ( i = 0; i < 9; i++) {           // we need 9 bytes
+      data[i] = ds.read();
+      //Serial.print(data[i], HEX);
+      //Serial.print(" ");
+    }
+    
+      
+      
+//    Serial.print(" CRC=");
+//    Serial.print(OneWire::crc8(data, 8), HEX);
+//    Serial.println();
+//  
+    // Convert the data to actual temperature
+    // because the result is a 16 bit signed integer, it should
+    // be stored to an "int16_t" type, which is always 16 bits
+    // even when compiled on a 32 bit processor.
+    int16_t raw = (data[1] << 8) | data[0];
+    if (type_s) {
+      raw = raw << 3; // 9 bit resolution default
+      if (data[7] == 0x10) {
+        // "count remain" gives full 12 bit resolution
+        raw = (raw & 0xFFF0) + 12 - data[6];
+      }
+    } else {
+      byte cfg = (data[4] & 0x60);
+      // at lower res, the low bits are undefined, so let's zero them
+      if (cfg == 0x00) raw = raw & ~7;  // 9 bit resolution, 93.75 ms
+      else if (cfg == 0x20) raw = raw & ~3; // 10 bit res, 187.5 ms
+      else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
+      //// default is 12 bit resolution, 750 ms conversion time
+    }
+    celsius = (float)raw / 16.0;
+    fahrenheit = celsius * 1.8 + 32.0;
+    //Serial.print("Temperature = ");
+    //Serial.print(celsius);
+    //Serial.print(" Celsius, ");
+    //Serial.print(fahrenheit);
+    //Serial.println(" Fahrenheit");
+
+
+
+    if (abs(temperature[sensorNum]-fahrenheit)>=0.5) {
+  
+        temperature[sensorNum] = fahrenheit;
+       
+         String statusString = "w ";
+        statusString += sensorNum+tempDeviceStart;
+        statusString += " ";
+        statusString += fahrenheit;
+        
+        smartthingsend(statusString);
+        
+       Serial.print("w ");
+       Serial.print(sensorNum+tempDeviceStart);
+       Serial.print(" ");
+       Serial.println(fahrenheit);
+       
+       //mySerial.println("w 9 1");      
+    }
+  
+    sensorNum++;
+  
+  
+  }
+
+
 }
+#endif
+
